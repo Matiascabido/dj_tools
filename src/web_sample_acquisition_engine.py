@@ -11,7 +11,7 @@ import librosa
 import numpy as np
 from pydub import AudioSegment
 from config.config import (
-    ENABLE_WEB_ACQUISITION, PIXABAY_API_KEY, ENABLE_LANDR, ENABLE_LOOPMASTERS,
+    ENABLE_WEB_ACQUISITION, ENABLE_LANDR, ENABLE_LOOPMASTERS,
     LOOPMASTERS_USERNAME, LOOPMASTERS_PASSWORD, SAMPLES_TO_DOWNLOAD, ANALYSIS_THRESHOLDS
 )
 
@@ -21,37 +21,54 @@ class WebSampleAcquisitionEngine:
         self.downloaded_hashes = set()  # Para evitar duplicados
 
     def acquire_samples(self):
-        """Adquiere samples de fuentes configuradas."""
+        """Adquiere samples de LANDR."""
         if not ENABLE_WEB_ACQUISITION:
+            print("Adquisición web deshabilitada.")
             return
 
+        print("Iniciando adquisición de samples desde LANDR...")
         for instrument, count in SAMPLES_TO_DOWNLOAD.items():
-            samples = []
-            if PIXABAY_API_KEY:
-                samples.extend(self._search_pixabay(instrument, count // 2))  # Mitad de Pixabay
-            if ENABLE_LANDR:
-                samples.extend(self._scrape_landr(instrument, count // 2))
-            if ENABLE_LOOPMASTERS and LOOPMASTERS_USERNAME:
-                samples.extend(self._scrape_loopmasters(instrument, count // 2))
-
-            # Descargar y analizar
+            print(f"Buscando {count} samples para {instrument} en LANDR...")
+            samples = self._scrape_landr(instrument, count)
+            print(f"Encontrados {len(samples)} URLs para {instrument}")
             for url in samples[:count]:
+                print(f"Descargando: {url}")
                 self._download_and_analyze(url, instrument)
+
+    def _search_freesound(self, instrument, count):
+        """Buscar en Freesound API."""
+        query = f"{instrument} techno hardgroove"
+        url = f"https://freesound.org/apiv2/search/text/?query={query}&token={FREESOUND_API_KEY}&fields=id,previews&filter=license:cc0"
+        try:
+            response = self.session.get(url)
+            data = response.json()
+            previews = []
+            for result in data.get('results', []):
+                if 'previews' in result:
+                    previews.append(result['previews']['preview-hq-mp3'])  # URL de preview
+            return previews[:count]
+        except Exception as e:
+            print(f"Error en Freesound: {e}")
+            return []
 
     def _search_pixabay(self, instrument, count):
         """Buscar en Pixabay via scraping (sin API key)."""
         query = f"techno {instrument} sample free"
         url = f"https://pixabay.com/es/sound-effects/search/{query.replace(' ', '%20')}/"
+        print(f"Scraping Pixabay: {url}")
         try:
             response = self.session.get(url)
+            print(f"Respuesta Pixabay: {response.status_code}")
             soup = BeautifulSoup(response.text, 'html.parser')
-            # Buscar links de audio (ajustar selector basado en HTML real)
+            # Buscar links de audio (ajustar selector)
             audio_links = []
             for link in soup.find_all('a', href=True):
-                if 'sound' in link['href'] and ('.wav' in link['href'] or '.mp3' in link['href']):
+                if 'sound' in link['href'] and ('.wav' in link['href'] or '.mp3' in link['href'] or 'download' in link['href']):
                     audio_links.append(link['href'])
+            print(f"Links encontrados en Pixabay: {len(audio_links)}")
             return audio_links[:count]
-        except:
+        except Exception as e:
+            print(f"Error en Pixabay: {e}")
             return []
 
     def _login_pixabay(self):
@@ -63,19 +80,22 @@ class WebSampleAcquisitionEngine:
         self.session.post(login_url, data=payload)
 
     def _scrape_landr(self, instrument, count):
-        """Scraping de LANDR (con login si necesario)."""
-        url = f"https://samples.landr.com/genres/techno/{instrument}"
-        # Verificar si requiere login
-        response = self.session.get(url)
-        if "login" in response.text.lower() or response.status_code == 401:
-            self._login_landr()
-            response = self.session.get(url)
+        """Scraping de LANDR con URLs específicas."""
+        url = f"https://samples.landr.com/genres/techno?instruments={instrument}"
+        print(f"Scraping LANDR: {url}")
         try:
+            response = self.session.get(url)
+            print(f"Respuesta LANDR: {response.status_code}")
             soup = BeautifulSoup(response.text, 'html.parser')
-            links = soup.find_all('a', href=True)
-            audio_links = [link['href'] for link in links if link['href'].endswith('.wav') or '.mp3' in link['href']]
+            # Buscar links de descarga (ajustar selector, e.g., .download-link o a[href*='.wav'])
+            audio_links = []
+            for link in soup.find_all('a', href=True):
+                if '.wav' in link['href'] or '.mp3' in link['href'] or 'download' in link['href']:
+                    audio_links.append(link['href'] if link['href'].startswith('http') else f"https://samples.landr.com{link['href']}")
+            print(f"Links encontrados en LANDR: {len(audio_links)}")
             return audio_links[:count]
-        except:
+        except Exception as e:
+            print(f"Error en LANDR: {e}")
             return []
 
     def _login_landr(self):
