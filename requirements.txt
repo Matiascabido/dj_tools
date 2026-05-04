@@ -1,0 +1,6 @@
+pydub
+numpy
+scipy
+librosa
+requests
+beautifulsoup4
